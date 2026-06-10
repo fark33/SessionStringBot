@@ -1,6 +1,4 @@
 python-dotenv
-SQLAlchemy
-psycopg2
 Telethon
 git+https://github.com/rahulps1000/pyropatch.git@pyrotgfork
 pyrotgfork

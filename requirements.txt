@@ -6,3 +6,6 @@ git+https://github.com/rahulps1000/pyropatch.git@pyrotgfork
 pyrotgfork
 TgCrypto
 uvloop
+pymongo[srv]
+dnspython
+

@@ -1,71 +1,75 @@
+import os
 import threading
-from sqlalchemy import create_engine
-from sqlalchemy import Column, TEXT, BigInteger
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, scoped_session
-from sqlalchemy.orm.exc import NoResultFound
-from sqlalchemy.pool import StaticPool
+from pymongo import MongoClient
+from pymongo.errors import PyMongoError
 from ssnbot import DB_URL
 
+# ====================== اتصال به MongoDB ======================
+try:
+    client = MongoClient(DB_URL, serverSelectionTimeoutMS=10000)
+    # تست اتصال
+    client.server_info()
+    
+    # استخراج نام دیتابیس از URL
+    db_name = DB_URL.split('/')[-1].split('?')[0]
+    if not db_name:
+        db_name = "sessionbot"
+    
+    db = client[db_name]
+    broadcast_col = db["broadcast"]
+    
+    print(f"✅ Successfully connected to MongoDB | Database: {db_name}")
+except Exception as e:
+    print(f"❌ MongoDB Connection Error: {e}")
+    raise
 
-BASE = declarative_base()
-
-
-class Broadcast(BASE):
-    __tablename__ = "broadcast"
-    user_id = Column(BigInteger, primary_key=True)
-    user_name = Column(TEXT)
-
-    def __init__(self, user_id, user_name):
-        self.user_id = user_id
-        self.user_name = user_name
-
-
-def start() -> scoped_session:
-    engine = create_engine(
-        DB_URL, client_encoding="utf8", poolclass=StaticPool)
-    BASE.metadata.bind = engine
-    BASE.metadata.create_all(engine)
-    return scoped_session(sessionmaker(bind=engine, autoflush=False))
-
-
-SESSION = start()
+# Lock برای جلوگیری از Race Condition (مشابه کد اصلی)
 INSERTION_LOCK = threading.RLock()
 
 
-async def add_user(user_id, user_name):
+# ====================== توابع ======================
+
+async def add_user(user_id: int, user_name: str):
+    """اضافه کردن یا آپدیت کاربر"""
     with INSERTION_LOCK:
         try:
-            usr = SESSION.query(Broadcast).filter_by(user_id=user_id).one()
-        except NoResultFound:
-            usr = Broadcast(user_id=user_id, user_name=user_name)
-            SESSION.add(usr)
-            SESSION.commit()
+            broadcast_col.update_one(
+                {"user_id": user_id},
+                {"$set": {"user_id": user_id, "user_name": user_name}},
+                upsert=True
+            )
+        except PyMongoError as e:
+            print(f"Error adding user {user_id}: {e}")
 
 
-async def is_user(user_id):
+async def is_user(user_id: int):
+    """چک کردن وجود کاربر"""
     with INSERTION_LOCK:
         try:
-            usr = SESSION.query(Broadcast).filter_by(user_id=user_id).one()
-            return usr.user_id
-        except NoResultFound:
+            user = broadcast_col.find_one({"user_id": user_id})
+            return user["user_id"] if user else False
+        except PyMongoError as e:
+            print(f"Error checking user {user_id}: {e}")
             return False
 
 
 async def query_msg():
+    """گرفتن لیست همه user_id ها"""
     try:
-        query = SESSION.query(Broadcast.user_id).order_by(Broadcast.user_id)
-        return query.all()
-    finally:
-        SESSION.close()
+        users = broadcast_col.find(
+            {}, 
+            {"user_id": 1, "_id": 0}
+        ).sort("user_id", 1)
+        return [user["user_id"] for user in users]
+    except PyMongoError as e:
+        print(f"Error querying users: {e}")
+        return []
 
 
-async def del_user(user_id):
+async def del_user(user_id: int):
+    """حذف کاربر"""
     with INSERTION_LOCK:
         try:
-            usr = SESSION.query(Broadcast).filter_by(user_id=user_id).one()
-            SESSION.delete(usr)
-            SESSION.commit()
-        except NoResultFound:
-            pass
-        
+            broadcast_col.delete_one({"user_id": user_id})
+        except PyMongoError as e:
+            print(f"Error deleting user {user_id}: {e}")
